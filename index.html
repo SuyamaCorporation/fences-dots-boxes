@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>フェンスでドット結びゲーム</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen p-4 flex flex-col items-center">
+<h1 class="text-2xl font-bold text-purple-300 mb-2">フェンスでドット結びゲーム</h1>
+<div class="flex gap-6 mb-3 text-sm">
+  <span class="text-blue-300 font-bold">あなた: <span id="pScore">0</span></span>
+  <span class="text-red-300 font-bold">CPU: <span id="cScore">0</span></span>
+  <span class="text-gray-400" id="turnDisplay">あなたの番</span>
+</div>
+<canvas id="c" aria-label="ドットアンドボックスゲームフィールド" class="cursor-pointer rounded"></canvas>
+<div id="result" class="hidden mt-4 text-center">
+  <p id="resultMsg" class="text-2xl font-bold text-yellow-300 mb-3"></p>
+  <button onclick="initGame()" aria-label="ゲームを再開する" class="bg-purple-700 hover:bg-purple-600 text-white font-bold py-2 px-8 rounded-full">もう一度</button>
+</div>
+<p class="mt-2 text-gray-500 text-xs">線の上をクリックして引いてください</p>
+
+<script>
+const C = document.getElementById("c");
+const ctx = C.getContext("2d");
+const GRID = 5; // 5x5 dots = 4x4 boxes
+const CELL = 80;
+const PAD = 40;
+const SIZE = PAD*2 + CELL*(GRID-1);
+C.width = SIZE; C.height = SIZE;
+
+// hLines[r][c]: horizontal line between dot(r,c) and dot(r,c+1)  r:0..GRID-1, c:0..GRID-2
+// vLines[r][c]: vertical line between dot(r,c) and dot(r+1,c)    r:0..GRID-2, c:0..GRID-1
+let hLines, vLines, boxes, playerTurn, pScore, cScore, gameOver;
+
+function initGame() {
+  document.getElementById("result").classList.add("hidden");
+  hLines = Array.from({length:GRID}, ()=>Array(GRID-1).fill(0));
+  vLines = Array.from({length:GRID-1}, ()=>Array(GRID).fill(0));
+  boxes  = Array.from({length:GRID-1}, ()=>Array(GRID-1).fill(0)); // 0=empty,1=player,2=cpu
+  playerTurn = true; pScore = 0; cScore = 0; gameOver = false;
+  updateUI(); draw();
+}
+
+function updateUI() {
+  document.getElementById("pScore").textContent = pScore;
+  document.getElementById("cScore").textContent = cScore;
+  document.getElementById("turnDisplay").textContent = playerTurn ? "あなたの番" : "CPUの番";
+}
+
+function dotPos(r,c) { return {x: PAD+c*CELL, y: PAD+r*CELL}; }
+
+function checkBoxes(who) {
+  let completed = 0;
+  for(let r=0;r<GRID-1;r++) for(let c=0;c<GRID-1;c++) {
+    if(boxes[r][c]===0) {
+      if(hLines[r][c]&&hLines[r+1][c]&&vLines[r][c]&&vLines[r][c+1]) {
+        boxes[r][c]=who; completed++;
+        if(who===1) pScore++; else cScore++;
+      }
+    }
+  }
+  updateUI();
+  return completed;
+}
+
+function totalLines() {
+  let t=0;
+  for(let r=0;r<GRID;r++) for(let c=0;c<GRID-1;c++) if(hLines[r][c]) t++;
+  for(let r=0;r<GRID-1;r++) for(let c=0;c<GRID;c++) if(vLines[r][c]) t++;
+  return t;
+}
+
+function maxLines() { return GRID*(GRID-1)*2; }
+
+function checkGameOver() {
+  if(pScore+cScore === (GRID-1)*(GRID-1)) {
+    gameOver=true;
+    const msg = pScore>cScore ? "あなたの勝ち！🎉" : pScore<cScore ? "CPUの勝ち" : "引き分け";
+    document.getElementById("resultMsg").textContent = msg;
+    document.getElementById("result").classList.remove("hidden");
+  }
+}
+
+// CPU AI: try to complete a box, else avoid giving opponent box, else random
+function cpuMove() {
+  // 1) Complete box if possible
+  const winning = findBoxComplete();
+  if(winning) { applyLine(winning, false); return; }
+  // 2) Avoid lines that give opponent 3 sides → 4
+  const safe = findSafeMove();
+  if(safe) { applyLine(safe, false); return; }
+  // 3) Random
+  const rand = findRandomMove();
+  if(rand) applyLine(rand, false);
+}
+
+function getAllMoves() {
+  const moves=[];
+  for(let r=0;r<GRID;r++) for(let c=0;c<GRID-1;c++) if(!hLines[r][c]) moves.push({type:"h",r,c});
+  for(let r=0;r<GRID-1;r++) for(let c=0;c<GRID;c++) if(!vLines[r][c]) moves.push({type:"v",r,c});
+  return moves;
+}
+
+function sidesOfBox(r,c) {
+  return (hLines[r][c]?1:0)+(hLines[r+1][c]?1:0)+(vLines[r][c]?1:0)+(vLines[r][c+1]?1:0);
+}
+
+function findBoxComplete() {
+  for(const m of getAllMoves()) {
+    const affected = getAffectedBoxes(m);
+    for(const [r,c] of affected) {
+      if(boxes[r][c]===0 && sidesOfBox(r,c)===3) return m;
+    }
+  }
+  return null;
+}
+
+function findSafeMove() {
+  const moves = getAllMoves();
+  const safe = moves.filter(m=>{
+    const aff = getAffectedBoxes(m);
+    return aff.every(([r,c])=>boxes[r][c]!==0||sidesOfBox(r,c)<2);
+  });
+  if(safe.length) return safe[Math.floor(Math.random()*safe.length)];
+  return null;
+}
+
+function findRandomMove() {
+  const moves = getAllMoves();
+  return moves.length ? moves[Math.floor(Math.random()*moves.length)] : null;
+}
+
+function getAffectedBoxes(m) {
+  const aff=[];
+  if(m.type==="h") {
+    if(m.r>0) aff.push([m.r-1,m.c]);
+    if(m.r<GRID-1) aff.push([m.r,m.c]);
+  } else {
+    if(m.c>0) aff.push([m.r,m.c-1]);
+    if(m.c<GRID-1) aff.push([m.r,m.c]);
+  }
+  return aff.filter(([r,c])=>r>=0&&r<GRID-1&&c>=0&&c<GRID-1);
+}
+
+function applyLine(m, isPlayer) {
+  if(m.type==="h") hLines[m.r][m.c]=1;
+  else vLines[m.r][m.c]=1;
+  const completed = checkBoxes(isPlayer?1:2);
+  draw();
+  checkGameOver();
+  if(gameOver) return;
+  if(completed===0) {
+    playerTurn = !isPlayer;
+    updateUI();
+    if(!isPlayer) return; // player just played, cpu goes
+    if(!playerTurn) { setTimeout(()=>{cpuMove();},400); }
+  } else {
+    // Same player again
+    if(!isPlayer) setTimeout(()=>cpuMove(),400);
+    updateUI();
+  }
+}
+
+function hitTest(mx, my) {
+  const threshold = 12;
+  // Check horizontal lines
+  for(let r=0;r<GRID;r++) for(let c=0;c<GRID-1;c++) {
+    if(hLines[r][c]) continue;
+    const x1=PAD+c*CELL, x2=PAD+(c+1)*CELL, y=PAD+r*CELL;
+    const px=Math.max(x1,Math.min(x2,mx));
+    if(Math.abs(my-y)<threshold && mx>=x1-threshold && mx<=x2+threshold)
+      return {type:"h",r,c};
+  }
+  // Check vertical lines
+  for(let r=0;r<GRID-1;r++) for(let c=0;c<GRID;c++) {
+    if(vLines[r][c]) continue;
+    const y1=PAD+r*CELL, y2=PAD+(r+1)*CELL, x=PAD+c*CELL;
+    if(Math.abs(mx-x)<threshold && my>=y1-threshold && my<=y2+threshold)
+      return {type:"v",r,c};
+  }
+  return null;
+}
+
+C.addEventListener("click", e=>{
+  if(gameOver || !playerTurn) return;
+  const rect=C.getBoundingClientRect();
+  const mx=e.clientX-rect.left, my=e.clientY-rect.top;
+  const m = hitTest(mx,my);
+  if(!m) return;
+  applyLine(m, true);
+  if(!gameOver && !playerTurn) setTimeout(()=>cpuMove(),400);
+});
+
+C.addEventListener("mousemove", e=>{
+  if(gameOver || !playerTurn) return;
+  const rect=C.getBoundingClientRect();
+  const mx=e.clientX-rect.left, my=e.clientY-rect.top;
+  draw(hitTest(mx,my));
+});
+
+function draw(hover) {
+  ctx.fillStyle="#0f0f1a"; ctx.fillRect(0,0,SIZE,SIZE);
+
+  // Boxes
+  for(let r=0;r<GRID-1;r++) for(let c=0;c<GRID-1;c++) {
+    if(boxes[r][c]) {
+      ctx.fillStyle=boxes[r][c]===1?"rgba(59,130,246,0.3)":"rgba(239,68,68,0.3)";
+      ctx.fillRect(PAD+c*CELL+2,PAD+r*CELL+2,CELL-4,CELL-4);
+      ctx.fillStyle=boxes[r][c]===1?"#93c5fd":"#fca5a5";
+      ctx.font="bold 22px sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle";
+      ctx.fillText(boxes[r][c]===1?"あ":"C", PAD+c*CELL+CELL/2, PAD+r*CELL+CELL/2);
+    }
+  }
+
+  // H lines
+  for(let r=0;r<GRID;r++) for(let c=0;c<GRID-1;c++) {
+    const x1=PAD+c*CELL, x2=PAD+(c+1)*CELL, y=PAD+r*CELL;
+    if(hLines[r][c]) {
+      ctx.strokeStyle="#a855f7"; ctx.lineWidth=5;
+    } else if(hover&&hover.type==="h"&&hover.r===r&&hover.c===c) {
+      ctx.strokeStyle="#c084fc"; ctx.lineWidth=3;
+    } else {
+      ctx.strokeStyle="#374151"; ctx.lineWidth=1;
+    }
+    ctx.beginPath(); ctx.moveTo(x1,y); ctx.lineTo(x2,y); ctx.stroke();
+  }
+
+  // V lines
+  for(let r=0;r<GRID-1;r++) for(let c=0;c<GRID;c++) {
+    const y1=PAD+r*CELL, y2=PAD+(r+1)*CELL, x=PAD+c*CELL;
+    if(vLines[r][c]) {
+      ctx.strokeStyle="#a855f7"; ctx.lineWidth=5;
+    } else if(hover&&hover.type==="v"&&hover.r===r&&hover.c===c) {
+      ctx.strokeStyle="#c084fc"; ctx.lineWidth=3;
+    } else {
+      ctx.strokeStyle="#374151"; ctx.lineWidth=1;
+    }
+    ctx.beginPath(); ctx.moveTo(x,y1); ctx.lineTo(x,y2); ctx.stroke();
+  }
+
+  // Dots
+  for(let r=0;r<GRID;r++) for(let c=0;c<GRID;c++) {
+    ctx.fillStyle="#e5e7eb";
+    ctx.beginPath(); ctx.arc(PAD+c*CELL, PAD+r*CELL, 5,0,Math.PI*2); ctx.fill();
+  }
+}
+
+initGame();
+</script>
+</body>
+</html>
